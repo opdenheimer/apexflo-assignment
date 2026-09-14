@@ -1,0 +1,56 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: apexflo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: apexflo
+      POSTGRES_PASSWORD: apexflo_secret
+      POSTGRES_DB: apexflo_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apexflo -d apexflo_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: apexflo-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: apexflo-app
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://apexflo:apexflo_secret@postgres:5432/apexflo_db
+      REDIS_URL: redis://redis:6379/0
+      # Local HTTP needs non-Secure cookies; set production only behind HTTPS.
+      APP_ENV: development
+      DEBUG: "false"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+volumes:
+  postgres_data:
+  redis_data:
