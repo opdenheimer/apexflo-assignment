@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ApexFlo — Cinema Kitchen & Stock Ops</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0b0f19;
+            --bg-card: #151c2e;
+            --accent-gold: #f59e0b;
+            --accent-neon: #10b981;
+            --accent-blue: #3b82f6;
+            --accent-red: #ef4444;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --border-color: #263352;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Outfit', sans-serif; }
+        body { background: var(--bg-primary); color: var(--text-main); min-height: 100vh; padding: 24px; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 1px solid var(--border-color); padding-bottom: 16px; }
+        .brand { font-size: 1.5rem; font-weight: 700; }
+        .brand span { color: var(--accent-gold); }
+
+        .dashboard-grid { display: grid; grid-template-columns: 1fr 1.2fr; gap: 24px; }
+        @media (max-width: 900px) { .dashboard-grid { grid-template-columns: 1fr; } }
+
+        .panel { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 16px; padding: 20px; }
+        .panel h3 { font-size: 1.2rem; margin-bottom: 16px; color: #fff; }
+
+        /* Stock Table */
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid var(--border-color); font-size: 0.9rem; }
+        th { color: var(--text-muted); }
+        .stock-input { background: #0f172a; border: 1px solid var(--border-color); color: #fff; padding: 6px 10px; border-radius: 8px; width: 80px; font-weight: 700; }
+        .btn-update { background: var(--accent-gold); color: #000; border: none; padding: 6px 12px; border-radius: 8px; font-weight: 700; cursor: pointer; }
+
+        /* Order Queue */
+        .order-card { background: #1c263e; border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+        .order-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .order-id { font-weight: 700; font-size: 1rem; }
+        .order-seat { background: #0f172a; padding: 2px 8px; border-radius: 6px; font-size: 0.8rem; color: var(--accent-gold); }
+        .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 700; }
+        .status-PLACED { background: rgba(245, 158, 11, 0.2); color: var(--accent-gold); }
+        .status-PREPARING { background: rgba(59, 130, 246, 0.2); color: var(--accent-blue); }
+        .status-READY { background: rgba(16, 185, 129, 0.2); color: var(--accent-neon); }
+        .status-DELIVERED { background: rgba(100, 116, 139, 0.2); color: #94a3b8; }
+
+        .btn-action { background: #334155; color: #fff; border: none; padding: 6px 14px; border-radius: 8px; font-size: 0.8rem; font-weight: 600; cursor: pointer; margin-right: 6px; }
+        .btn-action.ready { background: var(--accent-neon); color: #000; }
+        .btn-action.prep { background: var(--accent-blue); color: #fff; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="brand">🍿 Apex<span>Flo</span> Operations & Kitchen Console</div>
+        <div><button class="btn-update" onclick="addMenuItem()">+ Menu Item</button> <button class="btn-update" onclick="fetchData()">🔄 Refresh</button></div>
+    </div>
+
+    <div class="dashboard-grid">
+        <!-- Stock Control Panel -->
+        <div class="panel">
+            <h3>📦 Live Inventory & Instant Restock</h3>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">Updates emit immediate Redis stream events to all patron screens.</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Item</th>
+                        <th>Current Stock</th>
+                        <th>Set Qty</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody id="stockTableBody">
+                    <tr><td colspan="4" style="text-align: center;">Loading stock levels...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Live Kitchen Order Queue -->
+        <div class="panel">
+            <h3>👨‍🍳 Live Kitchen Order Stream</h3>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">Advance orders through the preparation and in-seat delivery lifecycle.</p>
+            <div id="orderQueue">
+                <div style="text-align: center; color: var(--text-muted); padding: 40px;">Loading orders...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const SHOW_ID = 1;
+        const CINEMA_ID = 1;
+
+        async function fetchData() {
+            await Promise.all([fetchStock(), fetchOrders()]);
+        }
+
+        async function fetchStock() {
+            try {
+                const res = await fetch(`/api/menu/${SHOW_ID}`);
+                if (!res.ok) throw new Error(`Menu request failed (${res.status})`);
+                const data = await res.json();
+                const tbody = document.getElementById("stockTableBody");
+                tbody.innerHTML = "";
+
+                data.items.forEach(item => {
+                    const tr = document.createElement("tr");
+                    tr.innerHTML = `
+                        <td><strong>${item.name}</strong></td>
+                        <td><span style="color: ${item.available_stock > 0 ? 'var(--accent-neon)' : 'var(--accent-red)'}; font-weight: 700;">${item.available_stock}</span></td>
+                        <td><input type="number" min="0" value="${item.available_stock}" id="stock-input-${item.id}" class="stock-input"></td>
+                        <td><button class="btn-update" onclick="adjustStock(${item.id})">Restock</button></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (e) { document.getElementById("stockTableBody").innerHTML = `<tr><td colspan="4">${e.message}</td></tr>`; }
+        }
+
+        async function adjustStock(itemId) {
+            const input = document.getElementById(`stock-input-${itemId}`);
+            const newQty = parseInt(input.value);
+            if (isNaN(newQty) || newQty < 0) return alert("Invalid quantity");
+
+            try {
+                const res = await fetch("/api/admin/inventory/adjust", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        menu_item_id: itemId,
+                        cinema_id: CINEMA_ID,
+                        show_id: SHOW_ID,
+                        new_quantity: newQty,
+                    })
+                });
+                if (!res.ok) throw new Error((await res.json()).detail || `Request failed (${res.status})`);
+                fetchStock();
+            } catch (e) { alert(e.message); }
+        }
+
+        // Minimal menu management for the demo. Stock is set immediately after creation.
+        async function addMenuItem() {
+            const name = prompt("Item name");
+            if (!name) return;
+            const price = Number(prompt("Price"));
+            const quantity = Number(prompt("Opening stock", "20"));
+            if (!(price > 0) || quantity < 0) return alert("Invalid price or stock");
+            const res = await fetch("/api/admin/menu", {
+                method: "POST", headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({name, price, category: "Snacks", description: "Added by admin"})
+            });
+            if (!res.ok) return alert("Could not add menu item");
+            const item = await res.json();
+            await fetch("/api/admin/inventory/adjust", {
+                method: "POST", headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({menu_item_id: item.id, cinema_id: CINEMA_ID, show_id: SHOW_ID, new_quantity: quantity})
+            });
+            fetchStock();
+        }
+
+        async function fetchOrders() {
+            try {
+                const res = await fetch("/api/admin/orders");
+                if (!res.ok) throw new Error(`Orders request failed (${res.status})`);
+                const orders = await res.json();
+                const queue = document.getElementById("orderQueue");
+                queue.innerHTML = "";
+
+                if (orders.length === 0) {
+                    queue.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 30px;">No active orders in queue.</div>`;
+                    return;
+                }
+
+                orders.forEach(o => {
+                    const card = document.createElement("div");
+                    card.className = "order-card";
+                    card.innerHTML = `
+                        <div class="order-header">
+                            <div>
+                                <span class="order-id">Order #${o.id}</span>
+                                <span class="order-seat">Seat ${o.seat}</span>
+                            </div>
+                            <span class="status-badge status-${o.status}">${o.status}</span>
+                        </div>
+                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+                            Total: ₹${o.total.toFixed(2)} • Time: ${new Date(o.created_at).toLocaleTimeString()}
+                        </div>
+                        <div>
+                            ${o.status === 'PLACED' ? `<button class="btn-action prep" onclick="updateOrderStatus(${o.id}, 'PREPARING')">Mark Preparing</button>` : ''}
+                            ${o.status === 'PREPARING' ? `<button class="btn-action ready" onclick="updateOrderStatus(${o.id}, 'READY')">Mark Ready for Delivery</button>` : ''}
+                            ${o.status === 'READY' ? `<button class="btn-action ready" onclick="updateOrderStatus(${o.id}, 'DELIVERED')">Seat Delivered</button>` : ''}
+                            ${o.status === 'DELIVERED' ? `<span style="font-size: 0.8rem; color: var(--text-muted);">✓ Completed</span>` : ''}
+                        </div>
+                    `;
+                    queue.appendChild(card);
+                });
+            } catch (e) { document.getElementById("orderQueue").innerHTML = `<div style="color: var(--accent-red)">${e.message}</div>`; }
+        }
+
+        async function updateOrderStatus(orderId, nextStatus) {
+            try {
+                const res = await fetch(`/api/orders/${orderId}/status`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ status: nextStatus })
+                });
+                if (res.ok) {
+                    fetchOrders();
+                } else {
+                    const err = await res.json();
+                    alert(err.detail);
+                }
+            } catch (e) { alert(e.message); }
+        }
+
+        setInterval(fetchOrders, 4000);
+        window.addEventListener("DOMContentLoaded", async () => {
+            const accessKey = window.prompt("Admin access key");
+            if (!accessKey) return;
+            const res = await fetch("/api/auth/admin/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ access_key: accessKey }),
+            });
+            if (!res.ok) return alert("Admin access denied");
+            fetchData();
+        });
+    </script>
+</body>
+</html>
