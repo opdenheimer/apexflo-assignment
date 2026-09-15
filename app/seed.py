@@ -128,7 +128,30 @@ async def seed_data():
             start_time=now - timedelta(hours=1),
             end_time=now + timedelta(hours=2),
         )
-        session.add_all([offer_intermission, offer_flat_combo])
+        # Stackable offers for testing offer stacking
+        offer_welcome10 = Offer(
+            name="WELCOME10",
+            discount_type=DiscountType.PERCENTAGE,
+            discount_value=10.0,
+            priority=1,
+            stackable=True,
+            max_uses_per_user=3,
+            is_active=True,
+            start_time=now - timedelta(hours=1),
+            end_time=now + timedelta(hours=2),
+        )
+        offer_flat5_stackable = Offer(
+            name="FLAT5STACK",
+            discount_type=DiscountType.FIXED,
+            discount_value=5.0,
+            priority=1,
+            stackable=True,
+            max_uses_per_user=5,
+            is_active=True,
+            start_time=now - timedelta(hours=1),
+            end_time=now + timedelta(hours=2),
+        )
+        session.add_all([offer_intermission, offer_flat_combo, offer_welcome10, offer_flat5_stackable])
 
         await session.commit()
         print("Seed data successfully created!")
