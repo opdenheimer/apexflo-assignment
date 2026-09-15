@@ -84,7 +84,7 @@ async def process_checkout(
     # -------------------------------------------------------------
     # Load active offers from DB
     from app.models.offer import Offer, OfferUsage
-    from app.services.offers import evaluate_offers, OfferCandidate, CartItemInput
+    from app.services.offers import evaluate_offers, OfferCandidate, CartItemInput, calculate_offer_discount
 
     active_offers_query = select(Offer).where(Offer.is_active == True)
     active_offers_res = await db.execute(active_offers_query)
@@ -135,14 +135,10 @@ async def process_checkout(
         for o in db_offers
     ]
 
-    offer_result = evaluate_offers(
-        items=cart_inputs,
-        active_offers=offer_candidates,
-        user_usage_counts=user_usage_counts,
-        evaluation_time=datetime.utcnow(),
-    )
-    discount = offer_result.discount_amount
-    applied_offer = offer_result.applied_offer
+    # -------------------------------------------------------------
+    # Step 4: Evaluate Offers (primary)
+    # -------------------------------------------------------------
+    # Offer evaluation will be performed after subtotal is calculated (see later block)
 
     # -------------------------------------------------------------
     # Step 5: Atomic Stock Claims inside DB Transaction
@@ -185,6 +181,53 @@ async def process_checkout(
         item_total = item_price * item_req.quantity
         subtotal += item_total
         line_item_snapshots.append((item_req.menu_item_id, item_name, item_price, item_req.quantity, item_total))
+    # -------------------------------------------------------------
+    # Step 5: Evaluate Offers (including stackable)
+    # -------------------------------------------------------------
+    # If patron explicitly requested an offer_code, filter or prioritize it
+    candidates_to_eval = offer_candidates
+    if request.offer_code:
+        matching = [o for o in offer_candidates if o.name.strip().upper() == request.offer_code.strip().upper()]
+        if matching:
+            # If specified by user, put matching offer first with boosted priority so it evaluates primarily
+            candidates_to_eval = matching + [o for o in offer_candidates if o.id != matching[0].id]
+
+    # Evaluate primary offer
+    offer_result = evaluate_offers(
+        items=cart_inputs,
+        active_offers=candidates_to_eval,
+        user_usage_counts=user_usage_counts,
+    )
+    discount = offer_result.discount_amount
+    applied_offer = offer_result.applied_offer
+    applied_offers = [applied_offer] if applied_offer else []
+
+    # Handle stackable offers: sort by priority desc, then id asc (earlier offer first)
+    stackable_candidates = sorted(
+        [o for o in offer_candidates if o.stackable and (not applied_offer or o.id != applied_offer.id)],
+        key=lambda x: (-x.priority, x.id)
+    )
+
+    stackable_offers = []
+    additional_discount = 0.0
+    if applied_offer and applied_offer.stackable:
+        for offer in stackable_candidates:
+            now = datetime.now()
+            if not offer.is_active:
+                continue
+            if offer.start_time and now < offer.start_time:
+                continue
+            if offer.end_time and now > offer.end_time:
+                continue
+            used = user_usage_counts.get(offer.id, 0)
+            if used >= offer.max_uses_per_user:
+                continue
+            disc = calculate_offer_discount(offer, subtotal)
+            if disc > 0:
+                additional_discount += disc
+                stackable_offers.append(offer)
+                applied_offers.append(offer)
+    discount += additional_discount
 
     # -------------------------------------------------------------
     # Step 6: Persist Order, OrderItems, and OfferUsage in one transaction
@@ -205,9 +248,9 @@ async def process_checkout(
     db.add(new_order)
     await db.flush()  # Populates new_order.id
 
-    if applied_offer:
+    for offer in applied_offers:
         db.add(OfferUsage(
-            offer_id=applied_offer.id,
+            offer_id=offer.id,
             user_id=user_id,
             order_id=new_order.id,
             used_at=datetime.utcnow(),
