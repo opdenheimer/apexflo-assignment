@@ -13,6 +13,8 @@ from app.core.auth import require_admin
 from app.models.menu import MenuItem, Inventory
 from app.models.order import Order, OrderStatus
 from app.schemas.menu import MenuItemResponse
+from app.models.offer import Offer
+from app.schemas.offer import OfferCreate, OfferResponse
 from app.services.orders import get_order_by_id
 
 router = APIRouter(prefix="/admin", tags=["Admin Surface"])
@@ -29,6 +31,14 @@ class StockAdjustmentRequest(BaseModel):
     cinema_id: int
     show_id: int
     new_quantity: int = Field(ge=0, description="New absolute stock quantity")
+
+@router.post("/offers", response_model=OfferResponse, status_code=status.HTTP_201_CREATED)
+async def create_offer(offer_in: OfferCreate, _: object = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    offer = Offer(**offer_in.model_dump())
+    db.add(offer)
+    await db.commit()
+    await db.refresh(offer)
+    return offer
 
 # Menu Management
 
