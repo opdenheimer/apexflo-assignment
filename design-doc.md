@@ -8,12 +8,31 @@ ApexFlo is a narrow in-seat ordering system: a QR-style patron link supplies sea
 
 **Delivered:** stock-aware menu/cart/checkout; order states `PLACED → PREPARING → READY → DELIVERED`; admin stock/menu control; offer rules; stock updates; a demand simulator.
 
-**Assumptions:** QR carries trusted-in-demo `show_id/screen_id/seat`; inventory is allocated per show; payment is mocked; a seat has one active patron session. **Critical PM questions:** is physical stock shared across shows (changes the inventory key and contention)? Are QR seat/show claims signed or only a convenience link? What p95 stock-sync SLO and reconnect behavior are acceptable? Are partial fulfilment/substitution and cancellation/restock required? What offer precedence is expected when caps, windows, and stackability conflict?
+### Assumptions
 
-**Out of scope for currrent submission:** 
-Real payments gateway integration
-NO refund/Cancellation after order placed
-seat-map validation, delivery routing, chain-wide analytics, and native apps.
+| Domain | Assumption | Rationale |
+|---|---|---|
+| Customer & seat | No account login; QR supplies cinema/show/screen/seat context and the server creates an anonymous session. | Fast ordering without exposing a user ID in the URL. |
+| Menu | Menu catalog is cinema-wide; availability is show-specific. | One catalog, per-show stock allocation. |
+| Stock & shows | Each show has a bounded shared food pool (200-seat planning assumption). | Creates realistic hot-item contention. |
+| Concurrency | Many patrons can checkout at once; DB pool is bounded. | Backpressure prevents connection exhaustion. |
+| Data | PostgreSQL is truth; Redis is ephemeral cache/fan-out. | Correctness survives Redis loss. |
+
+### Critical PM questions
+
+| Question | Why it changes the design |
+|---|---|
+| Is physical stock shared across simultaneous shows or allocated per show? | Determines the inventory key and hot-row contention. |
+| What happens if multiple customers scan the same seat QR? | The server treats each request independently; duplicate scans generate separate orders (idempotency key prevents accidental repeats). |
+| Is offer redemption tied to seat, booking, or customer? | Determines cap key and abuse prevention. |
+| What stock-sync p95 SLO and reconnect behavior are required? | Determines consumer capacity and client reconciliation. |
+| Are cancellation, substitution, or mid-show physical replenishment required? | Adds compensating stock transactions and staff workflow. |
+
+### Out of scope
+
+- Real payments/PCI gateway, Order Cancellation and Refunds, Patron's persistent accounts/loyalty benefits , Stock supplier management, native apps, and distributed load generators for scaling .
+- Seat-map validation and signed production QR claims.
+- Real-time admin sockets (admin queue polls); chain-wide analytics was not selected.
 
 ## 3. Architecture and flows
 
@@ -96,6 +115,12 @@ Likely limits: API/DB connection pool, then a hot inventory row. Scale API/consu
 `digital_twin/simulator.py` generates configurable screens, showtimes, audience profiles, and Gaussian pre-show/intermission demand. Its faithful checkout stub models the same conditional stock claim, worker queue, and delayed stock projection. It reports queue depth, p95 latency, 409 runouts, oversells, and p95 sync lag. The default result shows popcorn allocation is the first limit, with zero oversells.
 
 **Measured default run:** 1,740 orders; 572 accepted; 1,168 clean stock 409s; p95 checkout 39 ms; maximum queue 5; p95 stock-sync 86 ms (250 ms SLO); zero oversells. This proves stock safety and identifies popcorn allocation—not API latency—as the first constraint.
+
+### Stock-sync verification
+
+For a live-API validation run: (1) record stock before demand, (2) record each successful checkout, (3) read stock after demand, and calculate `expected_final = initial_stock − successful_orders`. Pass only if `final_stock == expected_final` and `final_stock >= 0`. Projection lag is correctly measured as `final_stock_observed_at − last_successful_checkout_at` (not the reverse); compare p95 lag with the SLO.
+
+The current twin is a faithful stub, so it applies the same conditional claim and records each post-commit projection delay directly; it produces p95 sync lag. A future live-API run needs a read-only admin inventory endpoint (there is no `/api/inventory` endpoint today) to perform the before/after read without querying PostgreSQL.
 
 **Why this design:** Redis-only counters are fast but cannot atomically join stock, order, offer usage, and rollback; PostgreSQL can. Polling is used for the low-volume admin queue; WebSockets are used for patron stock fan-out. Analytics is intentionally not chosen: offer correctness is the higher-risk transactional pillar. At larger scale, separate the projection consumer and add durable analytics consumers, while retaining the checkout contract.
 
