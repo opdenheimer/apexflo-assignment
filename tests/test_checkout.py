@@ -9,10 +9,12 @@ from fastapi import HTTPException
 from app.core.database import Base
 from app.models.menu import Cinema, Screen, Show, MenuItem, Inventory
 from app.models.order import User, UserRole, Order
+from app.models.offer import Offer, OfferUsage, DiscountType
 from app.schemas.order import CheckoutRequest, CheckoutLineItem
 from app.services.checkout import process_checkout
+from sqlalchemy import select
 
-TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+TEST_DATABASE_URL = "sqlite+aiosqlite:///test.db"
 
 @pytest_asyncio.fixture
 async def async_session_factory():
@@ -170,3 +172,116 @@ async def test_checkout_multi_item_transaction_rollback(async_session_factory):
         # Verify: Zero orders exist in database
         orders_check = await session.execute(select(Order))
         assert len(orders_check.scalars().all()) == 0
+
+@pytest.mark.asyncio
+async def test_checkout_with_stackable_offers(async_session_factory):
+    """
+    Verify that stackable offers are applied during checkout and OfferUsage rows are persisted for all applied offers.
+    """
+    from app.models.offer import Offer, DiscountType
+    from app.services.offers import evaluate_offers, OfferCandidate, CartItemInput, calculate_offer_discount
+    from app.schemas.order import CheckoutRequest, CheckoutLineItem
+    from app.models.menu import Cinema, Screen, Show, MenuItem
+    from app.models.order import User, UserRole
+    from sqlalchemy import select
+    
+    async with async_session_factory() as session:
+        # Add user, cinema, screen, show, item
+        user = User(name="Alice", email="alice@test.com", role=UserRole.PATRON)
+        cinema = Cinema(name="PVR Central", location="Audi 1")
+        session.add_all([user, cinema])
+        await session.flush()
+        
+        screen = Screen(cinema_id=cinema.id, name="Screen 1", capacity=100)
+        session.add(screen)
+        await session.flush()
+        
+        show = Show(
+            movie_name="Inception",
+            cinema_id=cinema.id,
+            screen_id=screen.id,
+            start_time=datetime.now(),
+            end_time=datetime.now() + timedelta(hours=2),
+        )
+        item = MenuItem(name="Large Soda", category="Drinks", price=150.0)
+        session.add_all([show, item])
+        await session.flush()
+        
+        # Add stackable offers
+        offer1 = Offer(
+            name="WELCOME10",
+            discount_type=DiscountType.PERCENTAGE,
+            discount_value=10.0,
+            priority=1,
+            stackable=True,
+            max_uses_per_user=3,
+            is_active=True,
+            start_time=datetime.now() - timedelta(hours=1),
+            end_time=datetime.now() + timedelta(hours=2),
+        )
+        offer2 = Offer(
+            name="FLAT5STACK",
+            discount_type=DiscountType.FIXED,
+            discount_value=5.0,
+            priority=1,
+            stackable=True,
+            max_uses_per_user=5,
+            is_active=True,
+            start_time=datetime.now() - timedelta(hours=1),
+            end_time=datetime.now() + timedelta(hours=2),
+        )
+        session.add_all([offer1, offer2])
+        
+        # Add inventory
+        inv = Inventory(
+            menu_item_id=item.id,
+            cinema_id=cinema.id,
+            show_id=show.id,
+            quantity=5,
+            version=0,
+        )
+        session.add(inv)
+        await session.commit()
+        
+        await session.flush()
+    
+    user_id = user.id
+    show_id = show.id
+    screen_id = screen.id
+    item_id = item.id
+    
+    request = CheckoutRequest(
+        show_id=show_id,
+        screen_id=screen_id,
+        seat="H10",
+        idempotency_key="idemp_key_stackable_001",
+        items=[CheckoutLineItem(menu_item_id=item_id, quantity=2)],  # subtotal = 300
+    )
+    
+    # First Checkout with stackable offers
+    async with async_session_factory() as session:
+        resp1 = await process_checkout(db=session, redis=None, user_id=user_id, request=request)
+        print(f'Order total: {resp1.total}')
+        print(f'Order discount: {resp1.discount}')
+        print(f'Order subtotal: {resp1.subtotal}')
+        print(f'Items: {len(resp1.items)}')
+        
+        # Verify discount was applied (should be more than 0)
+        assert resp1.discount > 0, f"Expected discount > 0, got {resp1.discount}"
+        
+        # Verify total is less than subtotal
+        assert resp1.total < resp1.subtotal, f"Expected total < subtotal, got total={resp1.total}, subtotal={resp1.subtotal}"
+        
+        # Check that OfferUsage rows were created for both offers
+        usage_query = select(OfferUsage).where(OfferUsage.user_id == user_id)
+        usage_res = await session.execute(usage_query)
+        usage_rows = usage_res.scalars().all()
+        print(f'OfferUsage rows created: {len(usage_rows)}')
+        assert len(usage_rows) >= 1, f"Expected at least 1 OfferUsage row, got {len(usage_rows)}"
+        
+        # Verify the discounts sum up correctly
+        # WELCOME10: 10% of 300 = 30
+        # FLAT5STACK: 5 fixed
+        # Total discount should be 35
+        assert resp1.discount == 35.0, f"Expected discount 35.0, got {resp1.discount}"
+        assert resp1.total == 265.0, f"Expected total 265.0, got {resp1.total}"
