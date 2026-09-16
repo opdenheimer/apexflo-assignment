@@ -13,6 +13,7 @@ from app.core.auth import require_admin
 from app.models.menu import MenuItem, Inventory
 from app.models.order import Order, OrderStatus
 from app.schemas.menu import MenuItemResponse
+from app.services.orders import get_order_by_id
 
 router = APIRouter(prefix="/admin", tags=["Admin Surface"])
 
@@ -156,14 +157,39 @@ async def list_live_orders(
         query = query.where(Order.status == status_filter)
     res = await db.execute(query)
     orders = res.scalars().all()
-    return [
-        {
+    
+    # Load items for each order
+    result = []
+    for o in orders:
+        full_order = await get_order_by_id(db, o.id)
+        result.append({
             "id": o.id,
             "seat": o.seat,
             "show_id": o.show_id,
+            "screen_id": o.screen_id,
             "status": o.status.value,
             "total": o.total,
+            "subtotal": o.subtotal,
+            "discount": o.discount,
             "created_at": o.created_at,
-        }
-        for o in orders
-    ]
+            "items": full_order.get("items", []) if full_order else [],
+        })
+    return result
+
+# ---------------------------------------------------------------------------
+# Detailed order view for admin (includes patron items)
+# ---------------------------------------------------------------------------
+@router.get("/orders/{order_id}", dependencies=[Depends(require_admin)])
+async def get_order_detail(
+    order_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return full order information, including each ordered item.
+
+    The response mirrors the structure used in the live‑order queue but is
+    limited to a single order identified by ``order_id``.
+    """
+    full_order = await get_order_by_id(db, order_id)
+    if not full_order:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
+    return full_order
