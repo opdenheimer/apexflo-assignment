@@ -99,7 +99,7 @@
 
         async function fetchStock() {
             try {
-                const res = await fetch(`/api/menu/${SHOW_ID}`);
+                const res = await fetch(`/api/menu/${SHOW_ID}`, { credentials: "same-origin" });
                 if (!res.ok) throw new Error(`Menu request failed (${res.status})`);
                 const data = await res.json();
                 const tbody = document.getElementById("stockTableBody");
@@ -126,6 +126,7 @@
             try {
                 const res = await fetch("/api/admin/inventory/adjust", {
                     method: "POST",
+                    credentials: "same-origin",
                     headers: {
                         "Content-Type": "application/json",
                     },
@@ -149,61 +150,157 @@
             const quantity = Number(prompt("Opening stock", "20"));
             if (!(price > 0) || quantity < 0) return alert("Invalid price or stock");
             const res = await fetch("/api/admin/menu", {
-                method: "POST", headers: {"Content-Type": "application/json"},
+                method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({name, price, category: "Snacks", description: "Added by admin"})
             });
             if (!res.ok) return alert("Could not add menu item");
             const item = await res.json();
             await fetch("/api/admin/inventory/adjust", {
-                method: "POST", headers: {"Content-Type": "application/json"},
+                method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({menu_item_id: item.id, cinema_id: CINEMA_ID, show_id: SHOW_ID, new_quantity: quantity})
             });
             fetchStock();
         }
 
         async function fetchOrders() {
-            try {
-                const res = await fetch("/api/admin/orders");
-                if (!res.ok) throw new Error(`Orders request failed (${res.status})`);
-                const orders = await res.json();
-                const queue = document.getElementById("orderQueue");
-                queue.innerHTML = "";
+    try {
+        const res = await fetch("/api/admin/orders", {
+            credentials: "same-origin"
+        });
 
-                if (orders.length === 0) {
-                    queue.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 30px;">No active orders in queue.</div>`;
-                    return;
-                }
-
-                orders.forEach(o => {
-                    const card = document.createElement("div");
-                    card.className = "order-card";
-                    card.innerHTML = `
-                        <div class="order-header">
-                            <div>
-                                <span class="order-id">Order #${o.id}</span>
-                                <span class="order-seat">Seat ${o.seat}</span>
-                            </div>
-                            <span class="status-badge status-${o.status}">${o.status}</span>
-                        </div>
-                        <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
-                            Total: ₹${o.total.toFixed(2)} • Time: ${new Date(o.created_at).toLocaleTimeString()}
-                        </div>
-                        <div>
-                            ${o.status === 'PLACED' ? `<button class="btn-action prep" onclick="updateOrderStatus(${o.id}, 'PREPARING')">Mark Preparing</button>` : ''}
-                            ${o.status === 'PREPARING' ? `<button class="btn-action ready" onclick="updateOrderStatus(${o.id}, 'READY')">Mark Ready for Delivery</button>` : ''}
-                            ${o.status === 'READY' ? `<button class="btn-action ready" onclick="updateOrderStatus(${o.id}, 'DELIVERED')">Seat Delivered</button>` : ''}
-                            ${o.status === 'DELIVERED' ? `<span style="font-size: 0.8rem; color: var(--text-muted);">✓ Completed</span>` : ''}
-                        </div>
-                    `;
-                    queue.appendChild(card);
-                });
-            } catch (e) { document.getElementById("orderQueue").innerHTML = `<div style="color: var(--accent-red)">${e.message}</div>`; }
+        if (!res.ok) {
+            throw new Error(`Orders request failed (${res.status})`);
         }
 
+        const orders = await res.json();
+        const queue = document.getElementById("orderQueue");
+
+        queue.innerHTML = "";
+
+        if (orders.length === 0) {
+            queue.innerHTML = `
+                <div style="text-align: center; color: var(--text-muted); padding: 30px;">
+                    No active orders in queue.
+                </div>
+            `;
+            return;
+        }
+
+        orders.forEach(o => {
+            const card = document.createElement("div");
+            card.className = "order-card";
+
+            card.innerHTML = `
+                <div class="order-header">
+                    <div>
+                        <span class="order-id">Order #${o.id}</span>
+                        <span class="order-seat">Seat ${o.seat}</span>
+                    </div>
+
+                    <span class="status-badge status-${o.status}">
+                        ${o.status}
+                    </span>
+                </div>
+
+                <div style="
+                    font-size: 0.85rem;
+                    color: var(--text-muted);
+                    margin-bottom: 12px;
+                ">
+                    Total: ₹${o.total.toFixed(2)}
+                    • Time: ${new Date(o.created_at).toLocaleTimeString()}
+                </div>
+
+                <div style="
+                    background: #0f172a;
+                    border-radius: 8px;
+                    padding: 10px;
+                    margin-bottom: 12px;
+                ">
+                    <div style="
+                        font-weight: 700;
+                        margin-bottom: 8px;
+                    ">
+                        Ordered Items
+                    </div>
+
+                    ${
+                        o.items && o.items.length > 0
+                            ? o.items.map(item => `
+                                <div style="
+                                    display: flex;
+                                    justify-content: space-between;
+                                    padding: 5px 0;
+                                    font-size: 0.9rem;
+                                ">
+                                    <span>
+                                        ${item.name} × ${item.quantity}
+                                    </span>
+
+                                    <span>
+                                        ₹${item.total_price.toFixed(2)}
+                                    </span>
+                                </div>
+                            `).join("")
+                            : `
+                                <div style="color: var(--text-muted);">
+                                    No items found
+                                </div>
+                            `
+                    }
+                </div>
+
+                <div>
+                    ${
+                        o.status === "PLACED"
+                            ? `<button class="btn-action prep" onclick="updateOrderStatus(${o.id}, 'PREPARING')">
+                                Mark Preparing
+                               </button>`
+                            : ""
+                    }
+
+                    ${
+                        o.status === "PREPARING"
+                            ? `<button class="btn-action ready" onclick="updateOrderStatus(${o.id}, 'READY')">
+                                Mark Ready for Delivery
+                               </button>`
+                            : ""
+                    }
+
+                    ${
+                        o.status === "READY"
+                            ? `<button class="btn-action ready" onclick="updateOrderStatus(${o.id}, 'DELIVERED')">
+                                Seat Delivered
+                               </button>`
+                            : ""
+                    }
+
+                    ${
+                        o.status === "DELIVERED"
+                            ? `<span style="font-size: 0.8rem; color: var(--text-muted);">
+                                ✓ Completed
+                               </span>`
+                            : ""
+                    }
+                </div>
+            `;
+
+            queue.appendChild(card);
+        });
+
+    } catch (e) {
+        document.getElementById("orderQueue").innerHTML = `
+            <div style="color: var(--accent-red)">
+                ${e.message}
+            </div>
+        `;
+    }
+}
         async function updateOrderStatus(orderId, nextStatus) {
             try {
                 const res = await fetch(`/api/orders/${orderId}/status`, {
                     method: "PATCH",
+                    credentials: "same-origin",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ status: nextStatus })
                 });
@@ -218,14 +315,15 @@
 
         setInterval(fetchOrders, 4000);
         window.addEventListener("DOMContentLoaded", async () => {
-            const accessKey = window.prompt("Admin access key");
+            const accessKey = window.prompt("Admin access key")?.trim();
             if (!accessKey) return;
             const res = await fetch("/api/auth/admin/login", {
                 method: "POST",
+                credentials: "same-origin",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ access_key: accessKey }),
             });
-            if (!res.ok) return alert("Admin access denied");
+            if (!res.ok) return alert((await res.json()).detail || "Admin access denied");
             fetchData();
         });
     </script>

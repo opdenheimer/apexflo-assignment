@@ -154,6 +154,7 @@
             <div class="cart-total" id="cartTotal">₹0.00</div>
         </div>
         <button class="btn-checkout" id="btnCheckout" onclick="submitCheckout()" disabled>Order to Seat</button>
+        <button class="btn-checkout" id="btnTrackOrder" onclick="resumeLastOrder()" hidden>Track Last Order</button>
     </div>
 
     <!-- Live Order Status Modal -->
@@ -356,6 +357,7 @@
 
                 const order = await res.json();
                 activeOrderId = order.order_id;
+                localStorage.setItem("apexflo_last_order", order.order_id);
                 cart = {};
                 updateCartUI();
                 showOrderModal(order);
@@ -379,6 +381,19 @@
             document.getElementById("orderModal").classList.remove("active");
             document.getElementById("btnCheckout").disabled = true;
             document.getElementById("btnCheckout").textContent = "Order to Seat";
+            if (activeOrderId) document.getElementById("btnTrackOrder").hidden = false;
+        }
+
+        async function resumeLastOrder() {
+            const orderId = activeOrderId || localStorage.getItem("apexflo_last_order");
+            if (!orderId) return;
+            const res = await fetch(`/api/orders/${orderId}`);
+            if (!res.ok) return alert("This order is no longer available in this session.");
+            activeOrderId = Number(orderId);
+            const order = await res.json();
+            showOrderModal(order);
+            updateStatusSteps(order.status);
+            pollOrderStatus(orderId);
         }
 
         async function pollOrderStatus(orderId) {
@@ -423,6 +438,11 @@
         window.addEventListener("DOMContentLoaded", async () => {
             document.getElementById("seatBadge").textContent = `Seat ${SEAT}`;
             await fetch("/api/auth/session", { method: "POST", credentials: "same-origin" });
+            const lastOrder = localStorage.getItem("apexflo_last_order");
+            if (lastOrder) {
+                activeOrderId = Number(lastOrder);
+                document.getElementById("btnTrackOrder").hidden = false;
+            }
             loadMenu();
             initWebSocket();
         });
