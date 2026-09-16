@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
+import os
 
 class Settings(BaseSettings):
     APP_NAME: str = "ApexFlo In-Cinema Commerce"
@@ -22,7 +23,7 @@ class Settings(BaseSettings):
     PATRON_SESSION_COOKIE_NAME: str = "apexflo_patron_session"
     ADMIN_SESSION_COOKIE_NAME: str = "apexflo_admin_session"
     SESSION_TTL_HOURS: int = 12
-    ADMIN_ACCESS_KEY: str = "apexflo-admin-demo"
+    ADMIN_ACCESS_KEY: str = os.getenv("ADMIN_ACCESS_KEY", "apexflo-admin-demo")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
