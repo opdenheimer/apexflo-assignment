@@ -89,12 +89,102 @@
         </div>
     </div>
 
+    <div class="panel" style="margin-top:24px">
+        <h3>🏷️ Create Promotional Offer</h3>
+        <form onsubmit="createOffer(event)" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+            <div>
+                <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:4px">Offer Name</label>
+                <input id="offerName" required placeholder="e.g. WELCOME10" class="stock-input" style="width:130px">
+            </div>
+            <div>
+                <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:4px">Discount Type</label>
+                <select id="offerType" class="stock-input" style="width:130px"><option>PERCENTAGE</option><option>FIXED</option></select>
+            </div>
+            <div>
+                <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:4px">Discount Value</label>
+                <input id="offerValue" required type="number" min="1" step="any" placeholder="e.g. 10" class="stock-input" style="width:100px">
+            </div>
+            <div>
+                <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:4px">Priority (Higher wins)</label>
+                <input id="offerPriority" type="number" value="0" placeholder="0" class="stock-input" style="width:90px">
+            </div>
+            <div>
+                <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:4px">Max Redemptions Allowed Per User</label>
+                <input id="offerUses" type="number" min="1" value="1" class="stock-input" style="width:120px" title="Maximum number of times a single patron can redeem this offer">
+            </div>
+            <div style="padding-bottom:8px">
+                <label style="font-size:0.85rem;display:flex;align-items:center;gap:4px;cursor:pointer"><input id="offerStackable" type="checkbox"> Stackable</label>
+            </div>
+            <div>
+                <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:4px">Start Date & Time</label>
+                <input id="offerStart" type="datetime-local" class="stock-input" style="width:180px">
+            </div>
+            <div>
+                <label style="display:block;font-size:0.75rem;color:var(--text-muted);margin-bottom:4px">End Date & Time</label>
+                <input id="offerEnd" type="datetime-local" class="stock-input" style="width:180px">
+            </div>
+            <button class="btn-update" style="height:36px;margin-bottom:2px">Create Offer</button>
+        </form>
+
+        <h4 style="margin-top:20px;margin-bottom:8px;font-size:1rem;color:var(--text-main)">Active Offers List</h4>
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Discount</th>
+                    <th>Priority</th>
+                    <th>Max Uses / User</th>
+                    <th>Stackable</th>
+                    <th>Start Date</th>
+                    <th>End Date</th>
+                </tr>
+            </thead>
+            <tbody id="offersTableBody">
+                <tr><td colspan="7" style="text-align:center;color:var(--text-muted)">Loading offers...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
     <script>
         const SHOW_ID = 1;
         const CINEMA_ID = 1;
 
         async function fetchData() {
-            await Promise.all([fetchStock(), fetchOrders()]);
+            await Promise.all([fetchStock(), fetchOrders(), fetchOffers()]);
+        }
+
+        async function fetchOffers() {
+            try {
+                const res = await fetch("/api/offers", { credentials: "same-origin" });
+                if (!res.ok) return;
+                const offers = await res.json();
+                const tbody = document.getElementById("offersTableBody");
+                if (!tbody) return;
+                tbody.innerHTML = "";
+                if (offers.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No active offers configured.</td></tr>`;
+                    return;
+                }
+                offers.forEach(o => {
+                    const tr = document.createElement("tr");
+                    const discountText = o.discount_type === "PERCENTAGE" ? `${o.discount_value}%` : `₹${o.discount_value}`;
+                    const startStr = o.start_time ? new Date(o.start_time).toLocaleString() : "Immediate";
+                    const endStr = o.end_time ? new Date(o.end_time).toLocaleString() : "No Expiry";
+                    tr.innerHTML = `
+                        <td><strong>${o.name}</strong></td>
+                        <td><span style="color:var(--accent-gold);font-weight:700">${discountText}</span></td>
+                        <td>${o.priority}</td>
+                        <td>${o.max_uses_per_user} redemptions</td>
+                        <td><span style="color:${o.stackable ? 'var(--accent-neon)' : 'var(--text-muted)'}">${o.stackable ? 'Yes' : 'No'}</span></td>
+                        <td>${startStr}</td>
+                        <td>${endStr}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (e) {
+                const tbody = document.getElementById("offersTableBody");
+                if (tbody) tbody.innerHTML = `<tr><td colspan="7" style="color:var(--accent-red)">Failed to load offers: ${e.message}</td></tr>`;
+            }
         }
 
         async function fetchStock() {
@@ -160,6 +250,22 @@
                 body: JSON.stringify({menu_item_id: item.id, cinema_id: CINEMA_ID, show_id: SHOW_ID, new_quantity: quantity})
             });
             fetchStock();
+        }
+
+        async function createOffer(event) {
+            event.preventDefault();
+            const start = document.getElementById("offerStart").value;
+            const end = document.getElementById("offerEnd").value;
+            const res = await fetch("/api/admin/offers", { method: "POST", credentials: "same-origin", headers: {"Content-Type":"application/json"}, body: JSON.stringify({
+                name: document.getElementById("offerName").value, discount_type: document.getElementById("offerType").value,
+                discount_value: Number(document.getElementById("offerValue").value), priority: Number(document.getElementById("offerPriority").value),
+                stackable: document.getElementById("offerStackable").checked, max_uses_per_user: Number(document.getElementById("offerUses").value),
+                start_time: start || null, end_time: end || null, is_active: true
+            }) });
+            if (!res.ok) return alert((await res.json()).detail || "Offer creation failed");
+            event.target.reset();
+            alert("Offer created");
+            fetchOffers();
         }
 
         async function fetchOrders() {

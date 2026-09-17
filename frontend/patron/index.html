@@ -140,11 +140,24 @@
             <div class="live-pill"><span class="live-dot"></span> Live In-Seat Delivery Active</div>
         </div>
 
+        <!-- Offers Section -->
+        <div class="section-title">🏷️ Active Offers & Discounts</div>
+        <div id="offersContainer" style="display:flex;gap:10px;overflow-x:auto;padding-bottom:12px;margin-bottom:16px;">
+            <div style="color:var(--text-muted);font-size:0.85rem;">Loading applicable offers...</div>
+        </div>
+
         <!-- Menu Section -->
         <div class="section-title">🍿 In-Cinema Menu (Realtime Live Stock)</div>
         <div class="menu-grid" id="menuGrid">
             <div style="text-align: center; color: var(--text-muted); padding: 40px;">Fetching live menu & stock...</div>
         </div>
+        <!-- Cart Promo Code Section -->
+        <div style="background:var(--bg-card);border:1px solid var(--border-color);border-radius:12px;padding:12px;margin-top:20px;display:flex;gap:8px;align-items:center;">
+            <span style="font-size:1.1rem;">🏷️</span>
+            <input id="promoCodeInput" type="text" placeholder="Enter or select Offer Code (Optional)" style="background:#0f172a;border:1px solid var(--border-color);color:#fff;padding:8px 12px;border-radius:8px;flex:1;font-weight:600;text-transform:uppercase;">
+            <button class="btn-add" id="btnApplyPromo" type="button" onclick="applyPromoCode()">Apply</button>
+        </div>
+        <div id="appliedPromoMsg" style="font-size:0.8rem;margin-top:6px;margin-left:4px;color:var(--accent-neon);display:none;"></div>
     </div>
 
     <!-- Floating Cart Bar -->
@@ -163,9 +176,23 @@
             <div style="font-size: 2.5rem; margin-bottom: 8px;">🎉</div>
             <h3 style="font-size: 1.3rem;">Order Placed Successfully!</h3>
             <div class="status-pill" id="orderStatusBadge">STATUS: PLACED</div>
-            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 16px;">
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
                 Order #<span id="displayOrderId">--</span> • Delivering directly to <span id="displaySeat">K12</span>
             </p>
+            <div id="orderPricingSummary" style="background:#0f172a;border-radius:10px;padding:10px;font-size:0.85rem;margin-bottom:16px;text-align:left;">
+                <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+                    <span style="color:var(--text-muted);">Subtotal:</span>
+                    <span id="displaySubtotal">₹0.00</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;margin-bottom:4px;color:var(--accent-neon);">
+                    <span>Discount (Offers Applied):</span>
+                    <span id="displayDiscount">-₹0.00</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-weight:700;border-top:1px solid var(--border-color);padding-top:4px;">
+                    <span>Total Paid:</span>
+                    <span id="displayTotal">₹0.00</span>
+                </div>
+            </div>
             <div class="status-steps">
                 <div class="step done" id="stepPlaced">1. Placed</div>
                 <div class="step" id="stepPrep">2. Preparing</div>
@@ -200,6 +227,62 @@
                 renderMenu(data.items);
             } catch (err) {
                 document.getElementById("menuGrid").innerHTML = `<div style="color: var(--accent-red); text-align: center;">Error loading menu: ${err.message}</div>`;
+            }
+        }
+
+        let selectedOfferCode = "";
+
+        function selectOffer(code) {
+            selectedOfferCode = code;
+            const input = document.getElementById("promoCodeInput");
+            if (input) input.value = code;
+            applyPromoCode();
+        }
+
+        function applyPromoCode() {
+            const input = document.getElementById("promoCodeInput");
+            const val = (input ? input.value : "").trim().toUpperCase();
+            const msg = document.getElementById("appliedPromoMsg");
+            if (!val) {
+                selectedOfferCode = "";
+                if (msg) { msg.style.display = "none"; }
+                return;
+            }
+            selectedOfferCode = val;
+            if (msg) {
+                msg.style.display = "block";
+                msg.textContent = `Promo code '${val}' applied. Will be used at checkout!`;
+            }
+        }
+
+        // 1b. Fetch and render Active Offers
+        async function loadOffers() {
+            try {
+                const res = await fetch(`/api/offers`);
+                if (!res.ok) return;
+                const offers = await res.json();
+                const container = document.getElementById("offersContainer");
+                if (!container) return;
+                if (!offers || offers.length === 0) {
+                    container.innerHTML = `<div style="color:var(--text-muted);font-size:0.85rem;">No active promotional offers at this time.</div>`;
+                    return;
+                }
+                container.innerHTML = "";
+                offers.forEach(o => {
+                    const discountLabel = o.discount_type === "PERCENTAGE" ? `${o.discount_value}% OFF` : `₹${o.discount_value} OFF`;
+                    const badge = document.createElement("div");
+                    badge.style = "background:var(--bg-card);border:1px solid var(--accent-gold);border-radius:10px;padding:8px 12px;min-width:140px;flex-shrink:0;cursor:pointer;";
+                    badge.onclick = () => selectOffer(o.name);
+                    badge.title = "Click to select and apply this offer";
+                    badge.innerHTML = `
+                        <div style="font-weight:700;color:var(--accent-gold);font-size:0.9rem;">${o.name}</div>
+                        <div style="font-size:0.8rem;color:var(--text-main);font-weight:600;">${discountLabel}</div>
+                        <div style="font-size:0.7rem;color:var(--text-muted);">${o.stackable ? '⚡ Stackable' : 'Exclusive'} • Click to apply</div>
+                    `;
+                    container.appendChild(badge);
+                });
+            } catch (err) {
+                console.error("Error loading offers:", err);
             }
         }
 
@@ -342,6 +425,7 @@
                         seat: SEAT,
                         idempotency_key: idempotencyKey,
                         items: items,
+                        offer_code: selectedOfferCode || (document.getElementById("promoCodeInput") ? document.getElementById("promoCodeInput").value.trim().toUpperCase() : null) || null,
                     })
                 });
 
@@ -374,6 +458,11 @@
             document.getElementById("displayOrderId").textContent = order.order_id;
             document.getElementById("displaySeat").textContent = order.seat;
             document.getElementById("orderStatusBadge").textContent = `STATUS: ${order.status}`;
+            if (document.getElementById("displaySubtotal")) {
+                document.getElementById("displaySubtotal").textContent = `₹${(order.subtotal || 0).toFixed(2)}`;
+                document.getElementById("displayDiscount").textContent = `-₹${(order.discount || 0).toFixed(2)}`;
+                document.getElementById("displayTotal").textContent = `₹${(order.total || 0).toFixed(2)}`;
+            }
             document.getElementById("orderModal").classList.add("active");
         }
 
@@ -444,6 +533,7 @@
                 document.getElementById("btnTrackOrder").hidden = false;
             }
             loadMenu();
+            loadOffers();
             initWebSocket();
         });
     </script>
